@@ -74,41 +74,44 @@ resource "aws_instance" "jenkins_apache_server" {
   associate_public_ip_address = true # Enable public IP address for the EC2 instance
 
   tags = {
-    Name = "Jenkins Server"
+    Name = "Jenkins and Apache Server"
   }
 
   user_data = <<-EOF
   #!/bin/bash
-echo "start"
 
-# Update package lists
+# Update system packages
 sudo apt update -y
 
-# Set hostname for Jenkins
-sudo hostnamectl set-hostname jenkins
+# Install nginx if not already installed
+sudo apt install -y nginx
 
-# Install OpenJDK and required packages
-sudo apt install -y openjdk-21-jdk openjdk-21-jre
+# Create a simple HTML file to show the message
+echo "Creating HTML file with 'SERVER1' message..."
 
-# Add Jenkins repository key and configure Jenkins repository
-sudo wget -q -O /usr/share/keyrings/jenkins-keyring.asc https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
-echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" | sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+# Use 'cat' to prevent issues with special characters
+sudo bash -c 'cat > /var/www/html/index.html << EOF
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Simple Server Page</title>
+  </head>
+  <body>
+    <h1>SERVER1</h1>
+  </body>
+</html>
+EOF'
 
-# Install Jenkins
-sudo apt update -y
-sudo apt install -y jenkins
+# Ensure nginx is running
+sudo systemctl enable nginx
+sudo systemctl start nginx
 
-# Change the Jenkins port to 9090
-sudo sed -i 's/HTTP_PORT=8080/HTTP_PORT=9090/' /etc/default/jenkins
-
-# Start Jenkins and enable it to start on boot
-sudo systemctl start jenkins
-sudo systemctl enable jenkins
-
-echo "Jenkins is now running on port 9090"
+# Show completion message
+echo "Nginx is up and running. You can view the page at http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
 
 EOF
 }
+
 
 # Create EC2 instance for Docker server in subnet_1b (us-east-1b)
 resource "aws_instance" "docker_server" {
@@ -124,82 +127,56 @@ resource "aws_instance" "docker_server" {
 
   user_data = <<-EOF
   #!/bin/bash
-set -e  # Exit on any error
-exec > >(tee /var/log/ip-display.log) 2>&1
 
-echo "Starting IP address display setup..."
-
-# Update package list
+# Update system packages
 sudo apt update -y
 
-# Install nginx
-echo "Installing nginx..."
+# Install nginx if not already installed
 sudo apt install -y nginx
 
-# Enable and start nginx
+# Create a simple HTML file to show the message
+echo "Creating HTML file with 'SERVER2' message..."
+
+# Use 'cat' to prevent issues with special characters
+sudo bash -c 'cat > /var/www/html/index.html << EOF
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Simple Server Page</title>
+  </head>
+  <body>
+    <h1>SERVER2</h1>
+  </body>
+</html>
+EOF'
+
+# Ensure nginx is running
 sudo systemctl enable nginx
 sudo systemctl start nginx
 
-# Fetch public IP address using multiple fallbacks
-echo "Fetching public IP address..."
-public_ip=$(curl -s http://icanhazip.com || 
-           curl -s http://ifconfig.me || 
-           curl -s http://ip.appspot.com ||
-           echo "Could not fetch IP address")
-
-# Create a more styled HTML file
-echo "<!DOCTYPE html>
-<html>
-  <head>
-    <title>Server Public IP Address</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-        margin: 0;
-        background-color: #f0f2f5;
-      }
-      .container {
-        text-align: center;
-        padding: 20px;
-        background-color: white;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-      }
-      h1 {
-        color: #1a73e8;
-      }
-      .ip {
-        font-size: 24px;
-        color: #202124;
-        margin: 20px 0;
-      }
-    </style>
-  </head>
-  <body>
-    <div class='container'>
-      <h1>Server Public IP Address</h1>
-      <div class='ip'>$public_ip</div>
-      <p>Last updated: $(date)</p>
-    </div>
-  </body>
-</html>" | sudo tee /var/www/html/index.html > /dev/null
-
-# Ensure nginx is running
-sudo systemctl restart nginx
-
-# Verify nginx status
-echo "Checking nginx status..."
-sudo systemctl status nginx
-
-echo "Setup completed!"
-echo "You can now access your public IP at: http://$public_ip"
+# Show completion message
+echo "Nginx is up and running. You can view the page at http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
 
 EOF
 }
+
+# Output the public IP of Docker EC2 instance
+output "ec2_public_ip_docker" {
+  value       = aws_instance.docker_server.public_ip
+  description = "The public IP address of the Docker EC2 instance"
+}
+
+# Register Docker EC2 instance to the unified target group
+resource "aws_lb_target_group_attachment" "docker_attachment" {
+  target_group_arn = aws_lb_target_group.unified_target_group.arn
+  target_id        = aws_instance.docker_server.id
+  port             = 80
+}
+
+
+
+
+
 
 # Create Application Load Balancer (ALB)
 resource "aws_lb" "my_alb" {
@@ -239,12 +216,7 @@ resource "aws_lb_target_group_attachment" "jenkins_apache_attachment" {
   port             = 80
 }
 
-# Register Docker EC2 instance to the unified target group
-resource "aws_lb_target_group_attachment" "docker_attachment" {
-  target_group_arn = aws_lb_target_group.unified_target_group.arn
-  target_id        = aws_instance.docker_server.id
-  port             = 80
-}
+
 
 # Create an ALB Listener to forward traffic to the unified target group
 resource "aws_lb_listener" "http_listener" {
@@ -269,8 +241,3 @@ output "ec2_public_ip_jenkins" {
   description = "The public IP address of the Jenkins Apache EC2 instance"
 }
 
-# Output the public IP of Docker EC2 instance
-output "ec2_public_ip_docker" {
-  value       = aws_instance.docker_server.public_ip
-  description = "The public IP address of the Docker EC2 instance"
-}
